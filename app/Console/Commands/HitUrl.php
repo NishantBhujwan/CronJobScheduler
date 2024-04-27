@@ -4,6 +4,8 @@ namespace App\Console\Commands;
 
 use Illuminate\Console\Command;
 use App\Models\CronJob;
+use Illuminate\Support\Facades\Cache;
+use GuzzleHttp\Client;
 
 class HitUrl extends Command
 {
@@ -33,11 +35,13 @@ class HitUrl extends Command
             return;
         }
 
-        $lastHitTime = Carbon::parse($cronJob->last_hit);
         $interval = $cronJob->interval_in_minutes;
-        $currentTime = Carbon::now();
 
-        if ($currentTime->diffInMinutes($lastHitTime) >= $interval) {
+        // Get the last hit time from cache or default to null
+        $lastHitTime = Cache::get('last_hit_time_' . $cronJob->id);
+
+        // Check if the URL has never been hit or if the interval has elapsed
+        if (!$lastHitTime || now()->diffInMinutes($lastHitTime) >= $interval) {
             $client = new Client();
             $response = $client->get($cronJob->url);
 
@@ -45,11 +49,10 @@ class HitUrl extends Command
             $statusCode = $response->getStatusCode();
             // Additional logic...
 
-            // Update last hit time
-            $cronJob->last_hit = $currentTime;
-            $cronJob->save();
-
             $this->info("URL {$cronJob->url} hit with status code: $statusCode");
+
+            // Update last hit time in cache
+            Cache::put('last_hit_time_' . $cronJob->id, now(), now()->addMinutes($interval));
         } else {
             $this->info("URL {$cronJob->url} skipped. Interval not elapsed yet.");
         }
