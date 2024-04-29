@@ -6,6 +6,7 @@ use Illuminate\Console\Command;
 use App\Models\CronJob;
 use Illuminate\Support\Facades\Cache;
 use GuzzleHttp\Client;
+use Illuminate\Support\Facades\Log;
 
 class HitUrl extends Command
 {
@@ -21,27 +22,47 @@ class HitUrl extends Command
      *
      * @var string
      */
-    protected $description = 'Hit a URL from cron job';
+    protected $description = 'Hit all URLs from cron job';
 
     /**
      * Execute the console command.
      */
     public function handle()
     {
-        $cronJob = CronJob::first(); // Assuming there's only one record in the cron table
+        $this->info("Fetching URLs from the database.");
 
-        if (!$cronJob) {
-            $this->info("No URL found in the database.");
-            return;
+        // Fetch all URLs from the database
+        $cronJobs = CronJob::all();
+
+        // Iterate over each URL and process them one by one
+        foreach ($cronJobs as $cronJob) {
+            $this->processUrl($cronJob);
         }
 
+        $this->info("All URLs processed successfully.");
+    }
+
+    /**
+     * Process a single URL.
+     *
+     * @param  \App\Models\CronJob  $cronJob
+     * @return void
+     */
+    protected function processUrl(CronJob $cronJob)
+    {
+        $this->info("Processing URL: {$cronJob->url}");
+
         $interval = $cronJob->interval_in_minutes;
+        $cacheKey = 'last_hit_time_' . $cronJob->id;
 
         // Get the last hit time from cache or default to null
-        $lastHitTime = Cache::get('last_hit_time_' . $cronJob->id);
+        $lastHitTime = Cache::get($cacheKey);
 
-        // Check if the URL has never been hit or if the interval has elapsed
-        if (!$lastHitTime || now()->diffInMinutes($lastHitTime) >= $interval) {
+        // Calculate the next hit time based on the interval
+        $nextHitTime = $lastHitTime ? $lastHitTime->addMinutes($interval) : now();
+
+        // Check if the interval has elapsed
+        if ($nextHitTime->isPast()) {
             $client = new Client();
             $response = $client->get($cronJob->url);
 
@@ -49,10 +70,12 @@ class HitUrl extends Command
             $statusCode = $response->getStatusCode();
             // Additional logic...
 
+            // Log the URL hit with status code
+            Log::info("URL {$cronJob->url} hit with status code: $statusCode");
             $this->info("URL {$cronJob->url} hit with status code: $statusCode");
 
             // Update last hit time in cache
-            Cache::put('last_hit_time_' . $cronJob->id, now(), now()->addMinutes($interval));
+            Cache::put($cacheKey, now(), now()->addMinutes($interval));
         } else {
             $this->info("URL {$cronJob->url} skipped. Interval not elapsed yet.");
         }
